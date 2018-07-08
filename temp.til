@@ -1,0 +1,17 @@
+{
+    -- Comment
+    nil_value = nil;
+
+    number_value = 1234567890;
+
+    boolean_true = true;
+    boolean_false = false;
+
+    ["key as string"] = "some value";
+
+    array_value = [ 1, 2, 3, nil, true, false, "Hello world" ];
+    
+    table_value = {
+        key = "value";  
+    };
+}

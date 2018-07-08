@@ -1,0 +1,7 @@
+.vs
+.vscode
+
+/mscv_test/.vs
+/mscv_test/obj
+/msvc_test/Debug
+/msvc_test/Release
