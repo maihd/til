@@ -1,13 +1,16 @@
-#ifndef __TIL_H__
+﻿#ifndef __TIL_H__
 #define __TIL_H__
 
 #ifndef TIL_API
 #define TIL_API
 #endif
 
+#include <stdio.h>
+
 typedef enum
 {
     TIL_NIL,
+    TIL_ARRAY,
     TIL_TABLE,
     TIL_NUMBER,
     TIL_STRING,
@@ -33,8 +36,8 @@ typedef struct til_value_t
 
         struct
         {
-            int                 length;
-            struct til_value_t* values;
+            int                  length;
+            struct til_value_t** values;
         } array;
 
         struct
@@ -62,10 +65,14 @@ typedef struct til_state_t til_state_t;
 TIL_API til_value_t* til_parse(const char* code, til_state_t** state);
 TIL_API void         til_release(til_state_t* state);
 
+TIL_API void         til_print(const til_value_t* value, FILE* out);
+TIL_API void         til_write(const til_value_t* value, FILE* out);
+
 #endif /* __TIL_H__ */
 
 #ifdef TIL_IMPL
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -184,6 +191,18 @@ static void free_value(til_state_t* state, til_value_t* value)
     }
 }
 
+static til_value_t* skip_space_and_comment(til_state_t* state)
+{
+    if (skip_space(state) == '-')
+    {
+        if (!is_eof(state) && state->buffer[state->cursor + 1] == '-')
+        {
+            next_line(state);
+        }
+    }
+    return  peek_char(state);
+}
+
 static til_value_t* parse_table(til_state_t* state);
 static til_value_t* parse_array(til_state_t* state);
 static til_value_t* parse_number(til_state_t* state);
@@ -191,11 +210,285 @@ static til_value_t* parse_string(til_state_t* state);
 static til_value_t* parse_single(til_state_t* state);
 static til_value_t* parse_symbol(til_state_t* state);
 
+static til_value_t* parse_number(til_state_t* state)
+{
+    if (skip_space(state) < 0)
+    {
+		return NULL;
+    }
+    else
+    {
+		int c = peek_char(state);
+		int sign = 1;
+		
+		if (c == '+')
+		{
+			c = next_char(state);
+            return NULL;
+			//croak(state, JSON_ERROR_UNEXPECTED,
+			//	  "JSON does not support number start with '+'");
+		}
+		else if (c == '-')
+		{
+			sign = -1;
+			c = next_char(state);
+		}
+		else if (c == '0')
+		{
+			c = next_char(state);
+			if (!isspace(c) && !ispunct(c))
+			{
+                return NULL;
+				//croak(state, JSON_ERROR_UNEXPECTED,
+				//	  "JSON does not support number start with '0'"
+				//	  " (only standalone '0' is accepted)");
+			}
+		}
+		else if (!isdigit(c))
+		{
+            return NULL;
+			//croak(state, JSON_ERROR_UNEXPECTED, "Unexpected '%c'", c);
+		}
+
+		int    dot    = 0;
+		int    dotchk = 1;
+		int    numpow = 1;
+		double number = 0;
+
+		while (c > 0)
+		{
+			if (c == '.')
+			{
+				if (dot)
+				{
+                    return NULL;
+					//croak(state, JSON_ERROR_UNEXPECTED,
+					//      "Too many '.' are presented");
+				}
+
+				if (!dotchk)
+				{
+					//croak(state, JSON_ERROR_UNEXPECTED, "Unexpected '%c'", c);
+                    return NULL;
+				}
+				else
+				{
+					dot    = 1;
+					dotchk = 0;
+					numpow = 1;
+				}
+			}
+			else if (!isdigit(c))
+			{
+				break;
+			}
+			else
+			{
+				dotchk = 1;
+				if (dot)
+				{
+					numpow *= 10;
+					number += (c - '0') / (double)numpow;
+				}
+				else
+				{
+					number = number * 10 + (c - '0');
+				}
+			}
+
+			c = next_char(state);
+		}
+
+		if (dot && !dotchk)
+		{
+			//croak(state, JSON_ERROR_UNEXPECTED,
+            //      "'.' is presented in number token, "
+			//      "but require a digit after '.' ('%c')", c);
+			return NULL;
+		}
+		else
+		{
+			til_value_t* value = make_value(state, TIL_NUMBER);
+			value->number = sign * number;
+			return value;
+		}
+    }
+}
+
+static til_value_t* parse_array(til_state_t* state)
+{
+    if (skip_space_and_comment(state) != '[')
+    {
+        return NULL;
+    }
+    else
+    {
+        next_char(state);
+    }
+
+    int           length = 0;
+    til_value_t** values = NULL;
+    while (!(skip_space_and_comment(state) <= 0 || peek_char(state) == ']'))
+    {
+        if (length > 0)
+        {
+            if (skip_space_and_comment(state) == ',')
+            {
+                next_char(state);
+            }
+            else
+            {
+                return NULL;
+            }
+        }
+
+        // Parse value
+        til_value_t* value = parse_single(state);
+        assert(value != NULL && "value cannot be null, checking parse_single()");
+
+        length = length + 1;
+        values = realloc(values, length * sizeof(til_value_t*));
+
+        values[length - 1] = value;
+    }
+
+    if (peek_char(state) != ']')
+    {
+        return NULL;
+    }
+    else
+    {
+        next_char(state);
+
+        til_value_t* value  = make_value(state, TIL_ARRAY);
+        value->array.length = length;
+        value->array.values = values;
+        return value;
+    }
+}
+
+static til_value_t* parse_single(til_state_t* state)
+{
+    if (skip_space_and_comment(state) > 0)
+    {
+        int c = peek_char(state);
+
+        switch (c)
+        {
+        case '{':
+            return parse_table(state);
+            
+        case '[':
+            return parse_array(state);
+            
+        case '"':
+            return parse_string(state);
+
+        case '-': case '+': case '0':
+        case '1': case '2': case '3':
+        case '4': case '5': case '6':
+        case '7': case '8': case '9':
+            return parse_number(state);
+        }
+
+        if (isalpha(c))
+        {
+            int len = 1;
+            int chr = next_char(state);
+            while (isalnum(chr))
+            {
+                len = len + 1;
+                chr = next_char(state);
+            }
+
+            const char* token = state->buffer + state->cursor - len;
+            if (len == 3 && strncmp(token, "nil", len))
+            {
+                til_value_t* value = make_value(state, TIL_NIL);
+                return value;
+            }
+            else if (len == 4 && strncmp(token, "true", len))
+            {
+                til_value_t* value = make_value(state, TIL_BOOLEAN);
+                value->boolean = TIL_TRUE;
+                return value;
+            }
+            else if (len == 5 && strncmp(token, "false", len))
+            {
+                til_value_t* value = make_value(state, TIL_BOOLEAN);
+                value->boolean = TIL_FALSE;
+                return value;
+            }
+            else
+            {
+                return NULL;
+            }
+        }
+        else
+        {
+            return NULL;
+        }
+    }
+    else
+    {
+        return NULL;
+    }
+}
+
+static til_value_t* parse_string(til_state_t* state)
+{
+    if (skip_space_and_comment(state) != '"')
+    {
+        return NULL;
+    }
+
+    int len = 1;
+    int chr = next_char(state);
+    while (chr > 0 && chr != '"')
+    {
+        len = len + 1;
+        chr = next_char(state);
+    }
+
+    if (chr != '"')
+    {
+        return NULL;
+    }
+    else
+    {
+        next_char(state);
+
+        til_value_t* value = make_value(state, TIL_STRING);
+        value->string.length = len;
+        value->string.buffer = malloc((len + 1) * sizeof(char));
+        
+        value->string.buffer[len] = 0;
+        memcpy(value->string.buffer, state->buffer + state->cursor - len, len);
+
+        return value;
+    }
+}
+
 static til_value_t* parse_symbol(til_state_t* state)
 {
     if (isalpha(skip_space(state)) || peek_char(state) == '_')
     {
+        int len = 1;
+        int chr = next_char(state);
+        while (isalnum(chr) || chr == '_')
+        {
+            len = len + 1;
+            chr = next_char(state);
+        }
 
+        til_value_t* value   = make_value(state, TIL_STRING);
+        value->string.length = len;
+        value->string.buffer = malloc((len + 1) * sizeof(char));
+        
+        value->string.buffer[len] = 0;
+        memcpy(value->string.buffer, state->buffer + state->cursor - len, len * sizeof(char));
+
+        return value;
     }
     else
     {
@@ -205,7 +498,7 @@ static til_value_t* parse_symbol(til_state_t* state)
 
 static til_value_t* parse_table(til_state_t* state)
 {
-    if (skip_space(state) != '{')
+    if (skip_space_and_comment(state) != '{')
     {
         return NULL;
     }
@@ -214,7 +507,9 @@ static til_value_t* parse_table(til_state_t* state)
         next_char(state);
     }
 
-    while (!(skip_space(state) <= 0 || peek_char(state) == '}'))
+    int         length = 0;
+    til_cell_t* values = NULL;
+    while (!(skip_space_and_comment(state) <= 0 || peek_char(state) == '}'))
     {
         // Parse name
         til_value_t* name = NULL;
@@ -248,11 +543,33 @@ static til_value_t* parse_table(til_state_t* state)
             return NULL;
         }
 
+        if (skip_space_and_comment(state) == '=')
+        {
+            next_char(state);
+        }
+        else
+        {
+            return NULL;
+        }
+
         // Parse value
         til_value_t* value = parse_single(state);
         assert(value != NULL && "value cannot be null, checking parse_single()");
 
-        
+        if (skip_space(state) == ';')
+        {
+            next_char(state);
+        }
+        else
+        {
+            return NULL;
+        }
+
+        length = length + 1;
+        values = realloc(values, length * sizeof(til_cell_t));
+
+        values[length - 1].name  = name;
+        values[length - 1].value = value;
     }
 
     if (peek_char(state) != '}')
@@ -261,11 +578,16 @@ static til_value_t* parse_table(til_state_t* state)
     }
     else
     {
-        til_value_t* 
+        next_char(state);
+
+        til_value_t* value  = make_value(state, TIL_TABLE);
+        value->table.length = length;
+        value->table.values = values;
+        return value;
     }
 }
 
-til_value_t* til_parse(const char* code, til_state_t** old_state)
+til_value_t* til_parse(const char* code, til_state_t** out_state)
 {
     til_state_t* state = make_state(code);
     if (!state)
@@ -273,13 +595,204 @@ til_value_t* til_parse(const char* code, til_state_t** old_state)
         return NULL;
     }
 
-    if (skip_space(state) == '{')
+    if (skip_space_and_comment(state) == '{')
     {
-        return parse_table(code);
+        til_value_t* value = parse_table(state);
+        if (value)
+        {
+            if (out_state)
+            {
+                *out_state = state;
+            }
+            return value;
+        }
+        else
+        {
+            if (out_state)
+            {
+                *out_state = NULL;
+            }
+            free_state(state);
+            return NULL;
+        }
     }
     else
     {
         return NULL;
+    }
+}
+
+void til_print(const til_value_t* value, FILE* out)
+{
+    if (value)
+    {
+        int i, n;
+        static int indent = 0;
+
+        switch (value->type)
+        {
+        case TIL_NIL:
+            fprintf(out, "null");
+            break;
+
+        case TIL_NUMBER:
+            fprintf(out, "%lf", value->number);
+            break;
+
+        case TIL_BOOLEAN:
+            fprintf(out, "%s", value->boolean ? "true" : "false");
+            break;
+
+        case TIL_STRING:
+            fprintf(out, "\"%s\"", value->string.buffer);
+            break;
+
+        case TIL_ARRAY:
+            fprintf(out, "[\n");
+
+            indent++;
+            for (i = 0, n = value->array.length; i < n; i++)
+            {
+                int j, m;
+                for (j = 0, m = indent * 4; j < m; j++)
+                {
+                    fprintf(out, " ");
+                }
+
+                til_print(value->array.values[i], out);
+                if (i < n - 1)
+                {
+                    fprintf(out, ",");
+                }
+                fprintf(out, "\n");
+            }
+            indent--;
+
+            for (i = 0, n = indent * 4; i < n; i++)
+            {
+                fprintf(out, " ");
+            }
+            fprintf(out, "]");
+            break;
+
+        case TIL_TABLE:
+            fprintf(out, "{\n");
+
+            indent++;
+            for (i = 0, n = value->table.length; i < n; i++)
+            {
+                int j, m;
+                for (j = 0, m = indent * 4; j < m; j++)
+                {
+                    fprintf(out, " ");
+                }
+
+                til_print(value->table.values[i].name, out);
+                fprintf(out, " = ");
+                til_print(value->table.values[i].value, out);
+                fprintf(out, ";\n");
+            }
+            indent--;
+
+            for (i = 0, n = indent * 4; i < n; i++)
+            {
+                fprintf(out, " ");
+            }
+            fprintf(out, "}");
+            break;
+
+        default:
+            break;
+        }
+    }
+}
+
+void til_write(const til_value_t* value, FILE* out)
+{
+    if (value)
+    {
+        int i, n;
+        static int indent = 0;
+
+        switch (value->type)
+        {
+        case TIL_NIL:
+            fprintf(out, "null");
+            break;
+
+        case TIL_NUMBER:
+            fprintf(out, "%lf", value->number);
+            break;
+
+        case TIL_BOOLEAN:
+            fprintf(out, "%s", value->boolean ? "true" : "false");
+            break;
+
+        case TIL_STRING:
+            fprintf(out, "\"%s\"", value->string.buffer);
+            break;
+
+        case TIL_ARRAY:
+            fprintf(out, "[\n");
+
+            indent++;
+            for (i = 0, n = value->array.length; i < n; i++)
+            {
+                int j, m;
+                for (j = 0, m = indent * 4; j < m; j++)
+                {
+                    fprintf(out, " ");
+                }
+
+                til_write(value->array.values[i], out);
+                if (i < n - 1)
+                {
+                    fprintf(out, ",");
+                }
+                fprintf(out, "\n");
+            }
+            indent--;
+
+            for (i = 0, n = indent * 4; i < n; i++)
+            {
+                fprintf(out, " ");
+            }
+            fprintf(out, "]");
+            break;
+
+        case TIL_TABLE:
+            fprintf(out, "{\n");
+
+            indent++;
+            for (i = 0, n = value->table.length; i < n; i++)
+            {
+                int j, m;
+                for (j = 0, m = indent * 4; j < m; j++)
+                {
+                    fprintf(out, " ");
+                }
+
+                til_write(value->table.values[i].name, out);
+                fprintf(out, " = ");
+                til_write(value->table.values[i].value, out);
+                if (i < n - 1)
+                {
+                    fprintf(out, ";");
+                }
+                fprintf(out, "\n");
+            }
+            indent--;
+
+            for (i = 0, n = indent * 4; i < n; i++)
+            {
+                fprintf(out, " ");
+            }
+            fprintf(out, "}");
+            break;
+
+        default:
+            break;
+        }
     }
 }
 
