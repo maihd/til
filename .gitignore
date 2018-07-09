@@ -5,3 +5,8 @@
 /mscv_test/obj
 /msvc_test/Debug
 /msvc_test/Release
+
+/mscv_test/x64/.vs
+/mscv_test/x64/obj
+/msvc_test/x64/Debug
+/msvc_test/x64/Release
