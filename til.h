@@ -78,14 +78,34 @@ TIL_API void         til_write(const til_value_t* value, FILE* out);
 #include <string.h>
 #include <assert.h>
 
+typedef struct til_buffer_t 
+{
+    int count;
+    int capacity;
+    int elemsize;
+} til_buffer_t;
+
+typedef struct til_array_t
+{
+    int count;
+    int capacity;
+    int elemsize;
+} til_array_t;
+
+/* @structdef: til_state_t */
 struct til_state_t
 {
+    til_state_t* next;
+
     int line;
     int column;
     int cursor;
     
     int         length;
     const char* buffer;
+
+    til_array_t value_buffers;
+    til_array_t string_buffers;
 };
 
 static til_state_t* make_state(const char* code)
@@ -93,6 +113,8 @@ static til_state_t* make_state(const char* code)
     til_state_t* state = (til_state_t*)malloc(sizeof(til_state_t));
     if (state)
     {
+        state->next   = 0;
+
         state->line   = 1;
         state->column = 1;
         state->cursor = 0;
@@ -107,6 +129,7 @@ static void free_state(til_state_t* state)
 {
     if (state)
     {
+        free_state(state->next);
         free(state);
     }
 }
@@ -587,6 +610,9 @@ static til_value_t* parse_table(til_state_t* state)
     }
 }
 
+static til_state_t* root_state = NULL;
+
+/* @funcdef: til_parse */
 til_value_t* til_parse(const char* code, til_state_t** out_state)
 {
     til_state_t* state = make_state(code);
@@ -604,6 +630,14 @@ til_value_t* til_parse(const char* code, til_state_t** out_state)
             {
                 *out_state = state;
             }
+            else
+            {
+                if (root_state)
+                {
+                    root_state->next = state;
+                }
+                root_state = state;
+            }
             return value;
         }
         else
@@ -619,6 +653,20 @@ til_value_t* til_parse(const char* code, til_state_t** out_state)
     else
     {
         return NULL;
+    }
+}
+
+/* @funcdef: til_release */
+void til_release(til_state_t* state)
+{
+    if (state)
+    {
+        free_state(state);
+    }
+    else
+    {
+        free_state(root_state);
+        root_state = NULL;
     }
 }
 
