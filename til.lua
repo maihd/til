@@ -108,14 +108,14 @@ function skipspace(state)
     local c = peekchar(state)
 
     while isspace(c) do
-        c = nextchar(c)
+        c = nextchar(state)
     end
 
     return c
 end
 
 function nextline(state)
-    local c = nextchar(state)
+    local c = peekchar(state)
 
     while c > 0 and c ~= CHAR_LINEFEED do
         c = nextchar(state)
@@ -148,12 +148,13 @@ function parsenumber(state)
         elseif chr ~= CHAR_DOT then
             return 0
         end
+        chr = peekchar(state)
     elseif chr == CHAR_PLUS then 
-        error("Number statting with '+' is not supported")
+        error("Number starting with '+' is not supported")
     elseif chr == CHAR_MINUS then
         sign = -1
         chr = nextchar(state)
-    else
+    elseif not isdigit(chr) then
         error("Unexpected token")
     end
         
@@ -162,8 +163,8 @@ function parsenumber(state)
     local dot = false
     local dotchk = true
 
-    while true do
-        if c == CHAR_DOT then
+    while true do                                
+        if chr == CHAR_DOT then
             if dot then
                 error("Dot is presented")
             elseif dotchk then 
@@ -172,25 +173,27 @@ function parsenumber(state)
                 dot    = true
                 dotchk = true
             end
-        elseif isdigit(c) then
+        elseif isdigit(chr) then
             dotchk = false
-            if dot then
+            if not dot then
                 num = num * 10 + chr - CHAR_0
             else
+                pow = pow * 10
                 num = num + (chr - CHAR_0) / pow
             end
         else
             break
         end
 
-        chr = nextchars(state)
+        chr = nextchar(state)
     end
 
     if dotchk then
         error("After dot must be a digit")
     end
 
-    return num
+    print(num)
+    return sign * num
 end
 
 function parsestring(state)
@@ -217,6 +220,8 @@ function parsearray(state)
     if skipredundant(state) ~= CHAR_BRACKS_0 then
         return nil
     else
+        nextchar(state)
+
         local result = {}
         while skipredundant(state) > 0 and peekchar(state) ~= CHAR_BRACKS_1 do
             if #result > 0 then
@@ -248,11 +253,21 @@ function parsetable(state)
     if skipredundant(state) ~= CHAR_BRACES_0 then
         return nil
     else
+        nextchar(state)
+
         local result = {}
         while skipredundant(state) > 0 and peekchar(state) ~= CHAR_BRACES_1 do
             local name
-            if isalpha(peekchar(state)) then
-                name = parsesymbol(state)
+            if isalpha(peekchar(state)) or peekchar(state) == CHAR_HYPHEN then
+                local len = 0
+                local chr = peekchar(state)
+
+                while isalnum(chr) or chr == CHAR_HYPHEN do
+                    len = len + 1
+                    chr = nextchar(state)
+                end
+
+                name = string.sub(state.buffer, state.cursor - len, state.cursor - 1)
             elseif peekchar(state) == CHAR_BRACKS_0 then 
                 nextchar(state)
 
@@ -261,7 +276,7 @@ function parsetable(state)
                 if peekchar(state) == CHAR_BRACKS_1 then
                     nextchar(state)
                 else
-                    error("Unterninated ']'")
+                    error("Unterninated with ']'")
                 end
             else
                 error("Unexpected in name of table")
@@ -306,15 +321,15 @@ function parsesingle(state)
         elseif c == CHAR_QUOTATION then
             return parsestring(state)
         elseif c == CHAR_PLUS or c == CHAR_MINUS or isdigit(c) then
-            
+            return parsenumber(state)
         elseif isalpha(c) then
-            local len = 1
+            local len = 0
             while isalpha(c) do
                 len = len + 1
                 c = nextchar(state)
             end 
 
-            local str = string.sub(state.buffer, state.cursor - len, state.cursor)
+            local str = string.sub(state.buffer, state.cursor - len, state.cursor - 1)
             if str == "nil" then
                 return nil
             elseif str == "true" then
@@ -342,6 +357,58 @@ function parse(code)
     end
 end
 
+function isarray(value)
+    local i = 0
+    for k in pairs(value) do
+        i = i + 1
+        if k ~= i or value[i] == nil then
+            return false
+        end
+    end
+end
+
+function tiltostring(value)
+    if type(value) == "table" then
+        local result = ""
+        if isarray(table) then
+            result = result .. "["
+            
+            for k, v in pairs(value) do
+                if k > 1 then
+                    result = result .. ","
+                end
+
+                result = result .. v
+            end
+
+            result = result .. "]"    
+        else
+            result = result .. "{"
+            
+            for k, v in pairs(value) do
+                result = result .. k
+                result = result .. "="
+                result = result .. v
+                result = result .. ";"
+            end
+            
+            result = result .. "}"
+        end
+        return result
+    else
+        return value
+    end
+end
+
+function stringify(value)
+    if type(value) ~= "table" or isarray(value) then
+        error("Require table to stringify")
+    else
+        return tiltostring(value)
+    end
+end
+
 return {
     parse = parse;
+    stringify = stringify;
 }

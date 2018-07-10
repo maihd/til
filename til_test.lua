@@ -1,8 +1,9 @@
 local til = require("til")
 
-print(til.parse([[
+local value = til.parse([[
 {
-    -- Comment
-    nil_value = nil;
+    nil_value = 10.123;
 }
-]]))
+]])
+
+print(til.stringify(value))
