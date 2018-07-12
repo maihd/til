@@ -25,26 +25,29 @@ typedef enum
 
 typedef struct til_cell_t til_cell_t;
 
+typedef struct til_array_t
+{
+    int                 length;
+    struct til_value_t* values;
+} til_array_t;
+
+typedef struct til_table_t
+{
+    int         length;
+    til_cell_t* values;
+} til_table_t;
+
 typedef struct til_value_t
 {
     til_type_t type;
 
     union
     {
-        double     number;
-        til_bool_t boolean;
-
-        struct
-        {
-            int                  length;
-            struct til_value_t** values;
-        } array;
-
-        struct
-        {
-            int         length;
-            til_cell_t* values;
-        } table;
+        double      number;
+        til_bool_t  boolean;
+                    
+        til_array_t array;
+        til_table_t table;
 
         struct
         {
@@ -56,8 +59,8 @@ typedef struct til_value_t
 
 struct til_cell_t
 {
-    til_value_t* name;
-    til_value_t* value;
+    til_value_t name;
+    til_value_t value;
 };
 
 typedef struct til_state_t til_state_t;
@@ -85,13 +88,6 @@ typedef struct til_buffer_t
     int elemsize;
 } til_buffer_t;
 
-typedef struct til_array_t
-{
-    int count;
-    int capacity;
-    int elemsize;
-} til_array_t;
-
 /* @structdef: til_state_t */
 struct til_state_t
 {
@@ -104,8 +100,8 @@ struct til_state_t
     int         length;
     const char* buffer;
 
-    til_array_t value_buffers;
-    til_array_t string_buffers;
+    til_buffer_t value_buffers;
+    til_buffer_t string_buffers;
 };
 
 static til_state_t* make_state(const char* code)
@@ -349,8 +345,8 @@ static til_value_t* parse_array(til_state_t* state)
         next_char(state);
     }
 
-    int           length = 0;
-    til_value_t** values = NULL;
+    int          length = 0;
+    til_value_t* values = NULL;
     while (!(skip_space_and_comment(state) <= 0 || peek_char(state) == ']'))
     {
         if (length > 0)
@@ -370,9 +366,9 @@ static til_value_t* parse_array(til_state_t* state)
         assert(value != NULL && "value cannot be null, checking parse_single()");
 
         length = length + 1;
-        values = realloc(values, length * sizeof(til_value_t*));
+        values = realloc(values, length * sizeof(values[0]));
 
-        values[length - 1] = value;
+        values[length - 1] = *value;
     }
 
     if (peek_char(state) != ']')
@@ -591,8 +587,8 @@ static til_value_t* parse_table(til_state_t* state)
         length = length + 1;
         values = realloc(values, length * sizeof(til_cell_t));
 
-        values[length - 1].name  = name;
-        values[length - 1].value = value;
+        values[length - 1].name  = *name;
+        values[length - 1].value = *value;
     }
 
     if (peek_char(state) != '}')
@@ -707,7 +703,7 @@ void til_print(const til_value_t* value, FILE* out)
                     fprintf(out, " ");
                 }
 
-                til_print(value->array.values[i], out);
+                til_print(&value->array.values[i], out);
                 if (i < n - 1)
                 {
                     fprintf(out, ",");
@@ -735,9 +731,9 @@ void til_print(const til_value_t* value, FILE* out)
                     fprintf(out, " ");
                 }
 
-                til_print(value->table.values[i].name, out);
+                til_print(&value->table.values[i].name, out);
                 fprintf(out, " = ");
-                til_print(value->table.values[i].value, out);
+                til_print(&value->table.values[i].value, out);
                 fprintf(out, ";\n");
             }
             indent--;
@@ -792,7 +788,7 @@ void til_write(const til_value_t* value, FILE* out)
                     fprintf(out, " ");
                 }
 
-                til_write(value->array.values[i], out);
+                til_write(&value->array.values[i], out);
                 if (i < n - 1)
                 {
                     fprintf(out, ",");
@@ -820,9 +816,9 @@ void til_write(const til_value_t* value, FILE* out)
                     fprintf(out, " ");
                 }
 
-                til_write(value->table.values[i].name, out);
+                til_write(&value->table.values[i].name, out);
                 fprintf(out, " = ");
-                til_write(value->table.values[i].value, out);
+                til_write(&value->table.values[i].value, out);
                 if (i < n - 1)
                 {
                     fprintf(out, ";");
